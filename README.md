@@ -1,11 +1,12 @@
 # Ticket-Monitor
 
 Checks [virginaustralia.com](https://www.virginaustralia.com/au/en/) for
-Business class reward seats redeemable with Velocity Points, on a schedule,
-and emails you when it finds new availability.
+one-way Business class reward seats redeemable with Velocity Points, on a
+schedule, and emails you the date and points cost when it finds new
+availability.
 
-Configured routes (edit in `config.yaml`): Paris, Rome, Milan, Barcelona and
-Madrid to Perth and Brisbane, in May and September.
+Configured routes (edit in `config.yaml`): one-way, Paris/Rome/Milan/
+Barcelona/Madrid to Perth/Brisbane, in May and September.
 
 ## How it works
 

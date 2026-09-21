@@ -137,6 +137,20 @@ class VirginAustraliaRewardSearch:
                 "screenshot/HTML and update _open_booking_widget()."
             )
 
+        # We only ever want one-way searches (Europe -> Australia). Most
+        # booking widgets default to "Return" and require a return date to
+        # search at all, so select "One way" explicitly. This is best-effort:
+        # if the widget has no such control (e.g. it's one-way-only once in
+        # points mode), this simply no-ops rather than failing the search.
+        for text in ["One way", "One Way", "Oneway"]:
+            try:
+                option = page.get_by_text(text, exact=False)
+                if option.count() > 0:
+                    option.first.click(timeout=3000)
+                    break
+            except Exception:
+                continue
+
     def _fill_search_form(self, origin: str, destination: str, date: dt.date, cabin: str, adults: int) -> None:
         page = self._page
         try:

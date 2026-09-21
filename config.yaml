@@ -1,12 +1,13 @@
 # Ticket-Monitor configuration
 #
 # Routes to watch for Virgin Australia "Book with Velocity Points" reward
-# availability. These European origins are not served by Virgin Australia
-# metal, so results here depend on whichever Velocity partner airline
-# (e.g. Etihad, Singapore Airlines) VA's own website is able to search and
-# sell as a reward booking. If a route/date returns nothing, that can mean
-# either "no reward seats" or "this pair isn't searchable on VA's site" --
-# see README.md for details and how to tell the difference.
+# availability. Searches are ONE-WAY only (Europe -> Australia). These
+# European origins are not served by Virgin Australia metal, so results
+# here depend on whichever Velocity partner airline (e.g. Etihad, Singapore
+# Airlines) VA's own website is able to search and sell as a reward
+# booking. If a route/date returns nothing, that can mean either "no
+# reward seats" or "this pair isn't searchable on VA's site" -- see
+# README.md for details and how to tell the difference.
 
 booking_url: "https://www.virginaustralia.com/au/en/"
 
