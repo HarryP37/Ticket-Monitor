@@ -271,24 +271,31 @@ class VirginAustraliaRewardSearch:
         except Exception:
             pass
 
+        # Confirmed via a screenshot from a run where this failed: the "Next"
+        # arrow button search never matched anything (it's icon-only, no
+        # accessible name matching "Next"/">"), so that loop silently gave
+        # up after one failed attempt and left the calendar wherever it
+        # happened to default to -- coincidentally the target month in
+        # earlier runs, but NOT in that one (showed March/April 2027
+        # instead of the requested May 2027), which is why the date could
+        # never be set no matter how the day-tile click itself was done.
+        #
+        # The real navigation control is a month-pill strip (confirmed ids
+        # "lowest-fare-month-select-month-N", role="option", aria-label
+        # e.g. "May 2027[ selected]. Use arrow keys to navigate between
+        # months, Enter key to choose month.") -- same custom-ARIA-listbox
+        # pattern as the one-way/return switch. All months are already in
+        # the DOM (not lazily loaded as you scroll), so no repeated
+        # "next" clicking is needed at all: find the pill for our target
+        # month directly and select it.
         target_month_label = date.strftime("%B %Y")  # e.g. "May 2027"
-
-        for _ in range(24):
-            if page.get_by_text(target_month_label, exact=False).count() > 0:
-                break
-            advanced = False
-            for name in ["Next", "Next month", ">"]:
-                try:
-                    btn = page.get_by_role("button", name=name, exact=False)
-                    if btn.count() > 0:
-                        btn.first.click(timeout=2000)
-                        page.wait_for_timeout(300)
-                        advanced = True
-                        break
-                except Exception:
-                    continue
-            if not advanced:
-                break
+        month_pill = page.get_by_role("option", name=target_month_label, exact=False)
+        if month_pill.count() > 0:
+            try:
+                month_pill.first.click(timeout=3000, force=True)
+            except Exception:
+                month_pill.first.dispatch_event("click")
+            page.wait_for_timeout(500)
 
         try:
             dismiss = page.locator("#fare-disclaimer-ok-button")
