@@ -442,10 +442,39 @@ class VirginAustraliaRewardSearch:
 
         self._click_id_or_text("guest-screen-lets-fly-button", ["Let's fly", "Lets fly", "Let's Fly"])
 
-        try:
-            page.wait_for_load_state("networkidle", timeout=30_000)
-        except PlaywrightTimeoutError:
-            pass
+        # This navigates to a SEPARATE booking-engine domain (Sabre-
+        # powered, storefront "VADX") which loads much more slowly than
+        # the marketing site's own SPA and, confirmed from a debug
+        # capture, loads an Incapsula bot-protection resource
+        # (/_Incapsula_Resource). That capture showed the page still
+        # sitting on its bare loading shell (#initial-progress-indicator,
+        # "Loading...") even after a full 30s networkidle wait -- which
+        # silently produced a misleadingly-labelled "ok" result with zero
+        # data, since nothing here actually checked whether the page had
+        # loaded. Poll actively for either the loading shell to clear or
+        # real content to appear, with a much longer budget, and raise a
+        # clearly diagnostic error if it never resolves.
+        loaded = False
+        for _ in range(30):  # ~60s at 2s intervals
+            spinner = page.locator("#initial-progress-indicator")
+            spinner_gone = spinner.count() == 0 or not spinner.first.is_visible()
+            if page.get_by_text("Choose your flights", exact=False).count() > 0:
+                loaded = True
+                break
+            if spinner_gone and page.get_by_text("Reward Seats", exact=False).count() > 0:
+                loaded = True
+                break
+            page.wait_for_timeout(2000)
+
+        if not loaded:
+            raise RewardSearchError(
+                "Results page never loaded past its loading spinner after ~60s. "
+                "This navigates to a separate Sabre-powered booking domain "
+                "(storefront 'VADX') that loads an Incapsula bot-protection "
+                "resource -- this may be a slow cross-domain load, or the "
+                "automated browser being detected/blocked by Incapsula. "
+                "Check the debug screenshot for a captcha/challenge page."
+            )
 
     def _parse_results(self, origin: str, destination: str, date: dt.date, cabin: str) -> list[FlightResult]:
         """Confirmed results-page layout (from a manual walkthrough): a
