@@ -126,6 +126,31 @@ class VirginAustraliaRewardSearch:
         except Exception:
             pass
 
+    def _click_id_or_text(self, element_id: str, texts: list[str]) -> None:
+        """Click a wizard nav button. Prefer its confirmed id with a
+        forced click (this app's buttons have repeatedly turned out to
+        need force=True or dispatch_event rather than a plain click --
+        confirmed for the one-way radio and the calendar day tile), and
+        fall back to matching any of `texts` if the id isn't found (e.g.
+        the site changes its markup)."""
+        page = self._page
+        target = page.locator(f"#{element_id}")
+        if target.count() == 0:
+            for text in texts:
+                loc = page.get_by_text(text, exact=False)
+                if loc.count() > 0:
+                    target = loc.first
+                    break
+            else:
+                return
+        try:
+            target.first.click(timeout=5000, force=True)
+        except Exception:
+            try:
+                target.first.dispatch_event("click")
+            except Exception:
+                pass
+
     def _open_booking_widget(self) -> None:
         page = self._page
         page.goto(self.booking_url, wait_until="domcontentloaded", timeout=45_000)
@@ -368,14 +393,7 @@ class VirginAustraliaRewardSearch:
             )
         page.wait_for_timeout(1000)
 
-        for name in ["Select dates", "Select Dates"]:
-            try:
-                btn = page.get_by_text(name, exact=False)
-                if btn.count() > 0:
-                    btn.first.click(timeout=5000)
-                    break
-            except Exception:
-                continue
+        self._click_id_or_text("fly-to-screen-next-button", ["Select dates", "Select Dates"])
         page.wait_for_timeout(800)
 
         # NOT default-selected (confirmed via debug capture: "Return" is
@@ -415,28 +433,14 @@ class VirginAustraliaRewardSearch:
             raise RewardSearchError(f"Could not select calendar date {date}: {e}")
         page.wait_for_timeout(500)
 
-        for name in ["Add guests", "Add Guests"]:
-            try:
-                btn = page.get_by_text(name, exact=False)
-                if btn.count() > 0:
-                    btn.first.click(timeout=5000)
-                    break
-            except Exception:
-                continue
+        self._click_id_or_text("date-screen-next-button", ["Add guests", "Add Guests"])
         page.wait_for_timeout(500)
 
         # Adult count already defaults to config's default of 1; only the
         # single-adult case is handled for now (TODO: click the "+" adult
         # stepper `adults - 1` times to support more).
 
-        for name in ["Let's fly", "Lets fly", "Let's Fly"]:
-            try:
-                btn = page.get_by_text(name, exact=False)
-                if btn.count() > 0:
-                    btn.first.click(timeout=5000)
-                    break
-            except Exception:
-                continue
+        self._click_id_or_text("guest-screen-lets-fly-button", ["Let's fly", "Lets fly", "Let's Fly"])
 
         try:
             page.wait_for_load_state("networkidle", timeout=30_000)
