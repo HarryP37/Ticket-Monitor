@@ -255,6 +255,22 @@ class VirginAustraliaRewardSearch:
         (the label span itself may not be "visible" per Playwright's
         actionability check, being screen-reader-only)."""
         page = self._page
+
+        # A "Fare information" disclaimer dialog auto-opens over the
+        # calendar (confirmed: #fare-disclaimer-ok-button, "Dismiss") and
+        # appears to make the app ignore date-tile clicks entirely while
+        # it's open -- three different click techniques all silently
+        # failed identically until this was found, which fits a
+        # component-level "ignore clicks while a dialog is open" check
+        # rather than anything about how the click itself was performed.
+        try:
+            dismiss = page.locator("#fare-disclaimer-ok-button")
+            if dismiss.count() > 0:
+                dismiss.first.click(timeout=3000)
+                page.wait_for_timeout(300)
+        except Exception:
+            pass
+
         target_month_label = date.strftime("%B %Y")  # e.g. "May 2027"
 
         for _ in range(24):
@@ -273,6 +289,14 @@ class VirginAustraliaRewardSearch:
                     continue
             if not advanced:
                 break
+
+        try:
+            dismiss = page.locator("#fare-disclaimer-ok-button")
+            if dismiss.count() > 0:
+                dismiss.first.click(timeout=2000)
+                page.wait_for_timeout(300)
+        except Exception:
+            pass
 
         day_label = f"{date.strftime('%A')}, {self._ordinal(date.day)} {target_month_label}"
         sr_text = page.get_by_text(day_label, exact=False)
