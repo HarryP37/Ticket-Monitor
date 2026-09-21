@@ -51,6 +51,24 @@ AIRPORT_CITY_NAMES = {
     "BNE": "Brisbane",
 }
 
+# Reverse-engineered from a real URL a user got by manually completing a
+# search: https://book.virginaustralia.com/dx/VADX/#/flight-selection?
+# ADT=1&class=First&awardBooking=true&pos=au-en&channel=&activeMonth=
+# 05-01-2027&journeyType=one-way&date=05-01-2027&origin=CDG&destination=
+# BNE&tpid=NA&fareType=FIXED_REWARD&cabinType=NA&businessTravel=false&
+# va-flow=flight-search&execution=<uuid>
+#
+# The trailing "execution" param is almost certainly a single-use,
+# server-issued session token -- deliberately omitted here since we can't
+# get a valid one without already having submitted a search, and this is
+# a bet that the app either treats it as optional or issues a fresh one
+# on the fly. "class=First" in that URL is unexplained (possibly a
+# results-page filter applied AFTER landing, not part of the original
+# search) and also omitted; "cabinType=NA" is kept as-is since it matches
+# what we've confirmed the wizard flow itself submits (no cabin choice
+# exists until the post-results fare modal).
+DIRECT_RESULTS_BASE_URL = "https://book.virginaustralia.com/dx/VADX/#/flight-selection"
+
 
 @dataclasses.dataclass
 class FlightResult:
@@ -569,11 +587,60 @@ class VirginAustraliaRewardSearch:
 
         return results
 
+    def _try_direct_url(self, origin: str, destination: str, date: dt.date, adults: int) -> bool:
+        """Navigate straight to a constructed results URL instead of
+        driving the whole wizard -- see DIRECT_RESULTS_BASE_URL for what's
+        known/unknown about this. Best-effort: any failure just means
+        "didn't work", not a hard error, since the wizard flow is the
+        proven fallback."""
+        page = self._page
+        date_str = date.strftime("%m-%d-%Y")
+        params = {
+            "ADT": str(adults),
+            "awardBooking": "true",
+            "pos": "au-en",
+            "activeMonth": date_str,
+            "journeyType": "one-way",
+            "date": date_str,
+            "origin": origin,
+            "destination": destination,
+            "tpid": "NA",
+            "fareType": "FIXED_REWARD",
+            "cabinType": "NA",
+            "businessTravel": "false",
+            "va-flow": "flight-search",
+        }
+        query = "&".join(f"{k}={v}" for k, v in params.items())
+        url = f"{DIRECT_RESULTS_BASE_URL}?{query}"
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        except Exception:
+            return False
+        for _ in range(15):  # ~30s -- shorter than the full wizard's 90s
+            # budget, since this is a cheap bet: if it's going to work it
+            # should be fast, and if the domain is Incapsula-blocked it'll
+            # be stuck either way, so no point waiting as long twice.
+            try:
+                if page.get_by_text("Choose your flights", exact=False).count() > 0:
+                    return True
+            except Exception:
+                return False
+            page.wait_for_timeout(2000)
+        return False
+
     def search(
         self, origin: str, destination: str, date: dt.date, cabin: str, adults: int,
         always_dump_debug: bool = False,
     ) -> list[FlightResult]:
         try:
+            if self._try_direct_url(origin, destination, date, adults):
+                results = self._parse_results(origin, destination, date, cabin)
+                if always_dump_debug:
+                    self._dump_debug(f"ok_direct_{origin}_{destination}_{date.isoformat()}")
+                return results
+
+            # Direct URL didn't pan out -- fall back to the full,
+            # confirmed-working wizard flow from the homepage.
             self._open_booking_widget()
             self._fill_search_form(origin, destination, date, cabin, adults, always_dump_debug=always_dump_debug)
             results = self._parse_results(origin, destination, date, cabin)
