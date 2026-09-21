@@ -278,19 +278,22 @@ class VirginAustraliaRewardSearch:
         sr_text = page.get_by_text(day_label, exact=False)
         if sr_text.count() == 0:
             raise RewardSearchError(f"Calendar tile for '{day_label}' not found")
-        # Confirmed DOM: <div class="fsDateTile">  <div class=
-        # "fsDateTileDefault ... fsDateTileDefaultIsSelectable">  <div
-        # class="fsDateTileDate">  <div class="fsDateTileScreenReaderOnly">
-        # {day_label}</div> <abbr aria-hidden>N</abbr> </div></div></div>.
-        # Going up just one ancestor lands on fsDateTileDate -- which
-        # itself contains "fsDateTile" as a substring, so a
-        # contains(@class,'fsDateTile') predicate matched it a level too
-        # early. That div is a plain layout wrapper with no click handler
-        # and, being inside a screen-reader-only node, may have a
-        # degenerate bounding box -- clicking it silently did nothing.
-        # Go up two levels instead, to the actual "IsSelectable" element.
-        tile = sr_text.first.locator("xpath=../..")
-        tile.first.click(timeout=5000, force=True)
+        # Two prior approaches (force-clicking the ancestor "IsSelectable"
+        # div, then clicking the sibling <abbr> digit normally) both left
+        # the date unset with no error -- root cause still unclear, but
+        # likely some combination of animation/transition timing that a
+        # coordinate-based click's hit-testing doesn't handle well here.
+        # dispatch_event bypasses coordinate/visibility/stability checks
+        # entirely and fires a real DOM click event straight at the node;
+        # React's delegated listener still catches it via normal bubbling
+        # regardless of where exactly in the tile's subtree it originates,
+        # which sidesteps all of the above at once.
+        tile = sr_text.first.locator("xpath=../..")  # fsDateTileDefault
+        try:
+            tile.first.dispatch_event("click")
+        except Exception:
+            sr_text.first.dispatch_event("click")
+        page.wait_for_timeout(500)
 
     def _fill_search_form(self, origin: str, destination: str, date: dt.date, cabin: str, adults: int) -> None:
         """Confirmed 3-step modal wizard (from a manual walkthrough of the
