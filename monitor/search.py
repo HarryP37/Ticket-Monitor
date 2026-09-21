@@ -3,26 +3,31 @@ reward flight search.
 
 IMPORTANT — read this before relying on the tool:
 
-This adapter was written without live access to virginaustralia.com (the
+This adapter was built without live access to virginaustralia.com (the
 environment that generated it has its outbound network access blocked for
-that domain). The locators below are a best-effort implementation using
-resilient, role/label-based Playwright queries rather than brittle CSS
-class names, but they are UNVERIFIED against the real site.
+that domain), so it was reverse-engineered from a debug HTML capture plus
+a manual walkthrough of the real site (screenshots) rather than direct
+testing. Confirmed as accurate: the "Use Velocity Points" toggle, the
+origin/destination field IDs, the 3-step modal wizard (Route -> Select
+dates -> Add guests -> Let's fly), and the results page's fixed-order
+fare modal (Economy Reward | Business Reward | First Reward). The
+weakest link, still unverified end-to-end, is `_select_calendar_date`
+(scoping a day-cell click when two months are shown side by side) and
+exactly what's clickable to open each flight's fare modal in
+`_parse_results` -- both were built from screenshots, not real DOM.
 
-The first run(s) should be triggered manually (workflow_dispatch) and the
-"debug" artifact (screenshot + HTML dump, written on any failure or on an
-unrecognised page state) should be inspected to correct the locators in
-`_open_booking_widget`, `_fill_search_form`, and `_parse_results` below.
-
-Everything in this module is intentionally isolated from the rest of the
-pipeline (config, dates, notify, state) so it can be fixed in place without
-touching anything else.
+If a run fails or looks wrong, the "debug" artifact (screenshot + HTML
+dump, written on any failure or on an unrecognised page state) shows
+exactly where. Everything in this module is intentionally isolated from
+the rest of the pipeline (config, dates, notify, state) so it can be
+fixed in place without touching anything else.
 """
 from __future__ import annotations
 
 import dataclasses
 import datetime as dt
 import random
+import re
 import time
 from pathlib import Path
 
@@ -173,11 +178,55 @@ class VirginAustraliaRewardSearch:
                 continue
         page.keyboard.press("Enter")
 
+    def _select_calendar_date(self, date: dt.date) -> None:
+        """The date-picker shows two months side by side (e.g. May 2027 /
+        June 2027), so day numbers repeat -- scope the click to whichever
+        column also has the target month's heading. Best-effort: if
+        navigation or scoping fails, this raises and the caller treats it
+        as a hard failure (there's no way to proceed without a date)."""
+        page = self._page
+        target_label = date.strftime("%B %Y")  # e.g. "May 2027"
+
+        for _ in range(24):
+            if page.get_by_text(target_label, exact=False).count() > 0:
+                break
+            advanced = False
+            for name in ["Next", "Next month", ">"]:
+                try:
+                    btn = page.get_by_role("button", name=name, exact=False)
+                    if btn.count() > 0:
+                        btn.first.click(timeout=2000)
+                        page.wait_for_timeout(300)
+                        advanced = True
+                        break
+                except Exception:
+                    continue
+            if not advanced:
+                break
+
+        day_str = str(date.day)
+        month_heading = page.get_by_text(target_label, exact=False).first
+        if month_heading.count() == 0:
+            raise RewardSearchError(f"Calendar never showed target month {target_label}")
+        # Assume day cells are inside the same immediate container as the
+        # month heading (a common "month block" layout) so we don't click
+        # the same day number in the adjacent month.
+        column = month_heading.locator("xpath=ancestor::*[self::div or self::section][1]")
+        day_cell = column.get_by_text(day_str, exact=True)
+        if day_cell.count() == 0:
+            day_cell = page.get_by_text(day_str, exact=True)
+        day_cell.first.click(timeout=5000)
+
     def _fill_search_form(self, origin: str, destination: str, date: dt.date, cabin: str, adults: int) -> None:
+        """Confirmed 3-step modal wizard (from a manual walkthrough of the
+        real site): Route (From/To) -> "Select dates" -> calendar (One way
+        already default-selected) -> "Add guests" -> guests review (Adult
+        count already defaults to 1, matching our config default) ->
+        "Let's fly", which lands on the results page. No cabin-class
+        control exists anywhere in this flow -- Business vs Economy is
+        chosen per-flight on the results page instead (see _parse_results)."""
         page = self._page
 
-        # These two are the only steps confirmed to exist on the homepage
-        # widget, so a failure here is a real, hard failure.
         try:
             self._fill_location("book-a-trip-panel-origin-input", origin)
             self._fill_location("book-a-trip-panel-destination-input", destination)
@@ -185,21 +234,20 @@ class VirginAustraliaRewardSearch:
             raise RewardSearchError(
                 f"Could not fill origin/destination for {origin}->{destination}: {e}"
             )
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(1000)
 
-        # TODO: everything below (trip type, date, cabin class, submit) is
-        # UNCONFIRMED -- the homepage widget doesn't expose these fields, so
-        # they likely live on a subsequent screen reached after From/To are
-        # filled (possibly a full navigation to a search-results/booking
-        # page). Deliberately best-effort/non-fatal for now: log and move on
-        # rather than raising, so whatever screen we land on gets captured
-        # by the debug dump for the next round of fixes instead of us
-        # aborting before seeing it.
-        try:
-            page.wait_for_load_state("networkidle", timeout=10_000)
-        except PlaywrightTimeoutError:
-            pass
+        for name in ["Select dates", "Select Dates"]:
+            try:
+                btn = page.get_by_text(name, exact=False)
+                if btn.count() > 0:
+                    btn.first.click(timeout=5000)
+                    break
+            except Exception:
+                continue
+        page.wait_for_timeout(800)
 
+        # Confirmed default-selected already, but click explicitly in case
+        # a future visit or different route defaults to "Return" instead.
         for text in ["One way", "One Way", "Oneway"]:
             try:
                 option = page.get_by_text(text, exact=False)
@@ -209,33 +257,31 @@ class VirginAustraliaRewardSearch:
             except Exception:
                 continue
 
-        date_str = date.strftime("%d %b %Y")  # e.g. "05 May 2027"
-        for label in ["Departure date", "Departing on", "Date"]:
+        try:
+            self._select_calendar_date(date)
+        except RewardSearchError:
+            raise
+        except Exception as e:
+            raise RewardSearchError(f"Could not select calendar date {date}: {e}")
+        page.wait_for_timeout(500)
+
+        for name in ["Add guests", "Add Guests"]:
             try:
-                field = page.get_by_label(label, exact=False)
-                if field.count() > 0:
-                    field.first.fill(date_str, timeout=3000)
+                btn = page.get_by_text(name, exact=False)
+                if btn.count() > 0:
+                    btn.first.click(timeout=5000)
                     break
             except Exception:
                 continue
+        page.wait_for_timeout(500)
 
-        if cabin.lower() == "business":
-            cabin_text = "Business"
-        elif cabin.lower() == "premium_economy":
-            cabin_text = "Premium Economy"
-        else:
-            cabin_text = None
-        if cabin_text:
-            try:
-                option = page.get_by_text(cabin_text, exact=False)
-                if option.count() > 0:
-                    option.first.click(timeout=3000)
-            except Exception:
-                pass
+        # Adult count already defaults to config's default of 1; only the
+        # single-adult case is handled for now (TODO: click the "+" adult
+        # stepper `adults - 1` times to support more).
 
-        for name in ["Search", "Search flights", "Find flights"]:
+        for name in ["Let's fly", "Lets fly", "Let's Fly"]:
             try:
-                btn = page.get_by_role("button", name=name, exact=False)
+                btn = page.get_by_text(name, exact=False)
                 if btn.count() > 0:
                     btn.first.click(timeout=5000)
                     break
@@ -243,11 +289,19 @@ class VirginAustraliaRewardSearch:
                 continue
 
         try:
-            page.wait_for_load_state("networkidle", timeout=20_000)
+            page.wait_for_load_state("networkidle", timeout=30_000)
         except PlaywrightTimeoutError:
             pass
 
     def _parse_results(self, origin: str, destination: str, date: dt.date, cabin: str) -> list[FlightResult]:
+        """Confirmed results-page layout (from a manual walkthrough): a
+        list of flight cards, each tagged "Reward Seats", followed by a
+        price box. Clicking a card opens a "Choose a fare" modal with three
+        FIXED columns in order -- Economy Reward | Business Reward | First
+        Reward -- each either "Unavailable" or a points price with a
+        "Select X Reward" button. That fixed order lets us just text-slice
+        the page between "Business Reward" and "First Reward" rather than
+        depend on guessed DOM structure, which is far more robust here."""
         page = self._page
         results: list[FlightResult] = []
 
@@ -261,42 +315,67 @@ class VirginAustraliaRewardSearch:
         if any(phrase.lower() in page_text.lower() for phrase in no_availability_phrases):
             return results
 
-        # Best-effort: look for fare cards that mention the requested cabin
-        # and a "pts" / "points" amount. This is the part most likely to
-        # need rework once the real markup is known.
-        cards = page.locator("[class*='fare'], [class*='flight-result'], [class*='fareCard']")
-        count = cards.count()
+        if cabin.lower() != "business":
+            # Only Business is implemented for now (that's all this tool is
+            # configured to search); other cabins would need their own
+            # column-slice ("Economy Reward" .. "Business Reward", etc).
+            return results
+
+        badges = page.get_by_text("Reward Seats", exact=False)
+        count = min(badges.count(), 20)  # sanity cap
         for i in range(count):
-            card = cards.nth(i)
+            badge = badges.nth(i)
             try:
-                text = card.inner_text()
+                # Click forward to the nearest points price in this card;
+                # the click bubbles up to whatever element actually owns
+                # the click handler, so we don't need to know the exact
+                # clickable container.
+                price_area = badge.locator("xpath=following::*[contains(text(),'Pts')][1]")
+                price_area.click(timeout=5000)
+                page.wait_for_timeout(800)
             except Exception:
                 continue
-            if cabin.replace("_", " ").lower() not in text.lower():
+
+            if page.get_by_text("Choose a fare", exact=False).count() == 0:
+                # Didn't open a fare modal -- skip this card rather than
+                # misreading a stale page state.
                 continue
-            points = None
-            for token in text.replace(",", "").split():
-                if token.isdigit() and len(token) >= 4:
-                    points = int(token)
-                    break
-            flight_number = ""
-            for line in text.splitlines():
-                line = line.strip()
-                if line[:2].isalpha() and line[2:].strip().isdigit():
-                    flight_number = line
-                    break
-            results.append(
-                FlightResult(
-                    origin=origin,
-                    destination=destination,
-                    date=date.isoformat(),
-                    cabin=cabin,
-                    flight_number=flight_number or f"unknown-{i}",
-                    points=points,
-                    taxes_fees=None,
-                    available=True,
-                )
+
+            modal_text = page.inner_text("body")
+            try:
+                start = modal_text.index("Business Reward")
+                end = modal_text.index("First Reward", start)
+                business_section = modal_text[start:end]
+            except ValueError:
+                business_section = ""
+
+            available = (
+                "unavailable" not in business_section.lower()
+                and "select business reward" in business_section.lower()
             )
+            if available:
+                points = None
+                for token in business_section.replace(",", "").split():
+                    if token.isdigit() and len(token) >= 4:
+                        points = int(token)
+                        break
+                flight_match = re.search(r"\b[A-Z]{2}\s?\d{2,4}\b", modal_text)
+                results.append(
+                    FlightResult(
+                        origin=origin,
+                        destination=destination,
+                        date=date.isoformat(),
+                        cabin=cabin,
+                        flight_number=flight_match.group(0) if flight_match else f"option-{i}",
+                        points=points,
+                        taxes_fees=None,
+                        available=True,
+                    )
+                )
+
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(500)
+
         return results
 
     def search(
