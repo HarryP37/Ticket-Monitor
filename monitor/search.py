@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import json
 import random
 import re
 import time
@@ -178,6 +179,29 @@ class VirginAustraliaRewardSearch:
         except Exception:
             pass
 
+    # Common Incapsula/Imperva verification-cookie name patterns. If one of
+    # these is set only late (or never) relative to when we submit the
+    # search, that's a legitimate "acted before the page finished its own
+    # setup" bug -- not evasion to fix, just waiting for a normal async
+    # process (their JS challenge) to actually complete first, the same as
+    # waiting for any other prerequisite.
+    _INCAPSULA_COOKIE_PATTERNS = ("incap_ses_", "visid_incap_", "nlbi_", "reese84", "___utmvc")
+
+    def _log_cookies(self, label: str) -> None:
+        try:
+            cookies = self._page.context.cookies()
+            matches = [c for c in cookies if any(p in c["name"] for p in self._INCAPSULA_COOKIE_PATTERNS)]
+            if matches:
+                names = ", ".join(f"{c['name']}@{c['domain']}" for c in matches)
+                self._network_log.append(f"[cookies@{label}] found: {names}")
+            else:
+                self._network_log.append(
+                    f"[cookies@{label}] none of the known Incapsula patterns present "
+                    f"({len(cookies)} cookie(s) total)"
+                )
+        except Exception as e:
+            self._network_log.append(f"[cookies@{label}] failed to read: {e}")
+
     def __exit__(self, exc_type, exc, tb):
         if self._browser:
             self._browser.close()
@@ -234,6 +258,7 @@ class VirginAustraliaRewardSearch:
         page = self._page
         page.goto(self.booking_url, wait_until="domcontentloaded", timeout=45_000)
         page.wait_for_timeout(2000)
+        self._log_cookies("homepage")
 
         # Dismiss the cookie-consent banner (a "CookieYes"-style widget;
         # confirmed button text is "Accept and close", nested in <span><p>).
@@ -546,12 +571,14 @@ class VirginAustraliaRewardSearch:
         # dump showed the bare loading shell regardless). "Choose your
         # flights" only exists on the real results page, so that's the
         # only signal used now.
+        self._log_cookies("wizard_lets_fly_arrival")
         loaded = False
         for _ in range(45):  # ~90s at 2s intervals
             if page.get_by_text("Choose your flights", exact=False).count() > 0:
                 loaded = True
                 break
             page.wait_for_timeout(2000)
+        self._log_cookies("wizard_lets_fly_final")
 
         if not loaded:
             raise RewardSearchError(
@@ -649,11 +676,25 @@ class VirginAustraliaRewardSearch:
         return results
 
     def _try_direct_url(self, origin: str, destination: str, date: dt.date, adults: int) -> bool:
-        """Navigate straight to a constructed results URL instead of
-        driving the whole wizard -- see DIRECT_RESULTS_BASE_URL for what's
-        known/unknown about this. Best-effort: any failure just means
-        "didn't work", not a hard error, since the wizard flow is the
-        proven fallback."""
+        """Navigate to a constructed results URL instead of driving the
+        whole wizard -- see DIRECT_RESULTS_BASE_URL for what's known/
+        unknown about this. Best-effort: any failure just means "didn't
+        work", not a hard error, since the wizard flow is the proven
+        fallback.
+
+        Confirmed via netlog: the actual data call (POST .../api/graphql)
+        hangs with literally no response ever, while ~364 other requests
+        on the same page all succeed -- including Incapsula's own script.
+        One real possibility this hasn't ruled out: we navigate straight
+        to the deep-linked search URL with zero warm-up time on this
+        origin, so if Incapsula's own verification cookie needs its JS
+        challenge to run first (typically a few seconds), we may be
+        submitting the sensitive query before that's finished -- a
+        timing/sequencing bug, not evasion to fix, the same as waiting for
+        any other prerequisite. Visit the bare domain first, give it time
+        to settle, THEN navigate client-side (hash change, not a fresh
+        page load) to the actual search -- closer to how a real user
+        landing on the site and then searching would naturally behave."""
         page = self._page
         date_str = date.strftime("%m-%d-%Y")
         params = {
@@ -672,11 +713,22 @@ class VirginAustraliaRewardSearch:
             "va-flow": "flight-search",
         }
         query = "&".join(f"{k}={v}" for k, v in params.items())
-        url = f"{DIRECT_RESULTS_BASE_URL}?{query}"
+        hash_route = DIRECT_RESULTS_BASE_URL.split("#", 1)[1]  # "/flight-selection"
+        base_domain_url = DIRECT_RESULTS_BASE_URL.split("#", 1)[0]  # ".../dx/VADX/"
+
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            page.goto(base_domain_url, wait_until="domcontentloaded", timeout=30_000)
         except Exception:
             return False
+        self._log_cookies("direct_url_arrival")
+        page.wait_for_timeout(6000)  # let bundle.js + Incapsula's own JS challenge settle
+        self._log_cookies("direct_url_after_warmup")
+
+        try:
+            page.evaluate(f"window.location.hash = {json.dumps(hash_route + '?' + query)}")
+        except Exception:
+            return False
+
         for _ in range(15):  # ~30s -- shorter than the full wizard's 90s
             # budget, since this is a cheap bet: if it's going to work it
             # should be fast, and if the domain is Incapsula-blocked it'll
