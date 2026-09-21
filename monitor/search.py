@@ -152,25 +152,43 @@ class VirginAustraliaRewardSearch:
         # selectable at all, is presumably chosen on whatever screen comes
         # next after From/To are filled; see the TODO in _fill_search_form.
 
-    def _fill_location(self, input_id: str, value: str) -> None:
-        """Fill an origin/destination field. Confirmed these are plain
-        <input> elements (ids book-a-trip-panel-origin-input /
-        -destination-input) that open a picker panel on click/focus.
+    def _fill_location(self, candidate_ids: list[str], value: str) -> None:
+        """Fill an origin/destination field. Confirmed there are actually
+        TWO separate inputs for each of origin/destination: the homepage
+        widget's (book-a-trip-panel-origin-input / -destination-input) and
+        a second one that appears once the full-screen modal opens
+        (from-to-screen-origin-input / -destination-input) -- confirmed via
+        debug capture that filling origin via the homepage id somehow syncs
+        both, but destination does not, leaving the modal's real field
+        empty. `candidate_ids` should be ordered by preference; whichever
+        is actually visible is used.
 
-        That panel has a search box AND a static region-browse list with
-        deterministic ids per airport (confirmed e.g. id="destination-PER"
-        for Perth) -- try the direct id first, since the search box's
-        suggestions are unreliable for bare IATA codes (confirmed: typing
-        "PER" returned "No suggestion found" even though "Perth (PER)" was
-        sitting right there in the browse list). Only European origins in
-        this tool's config won't have a browse-list id (no Europe region
-        tab), so this falls back to typing + picking a suggestion."""
+        Once focused, a picker panel opens with a search box AND a static
+        region-browse list with deterministic ids per airport (confirmed
+        e.g. id="destination-PER" for Perth) -- try the direct id first,
+        since the search box's suggestions are unreliable for bare IATA
+        codes (confirmed: typing "PER" returned "No suggestion found" even
+        though "Perth (PER)" was sitting right there in the browse list).
+        Only European origins in this tool's config won't have a
+        browse-list id (no Europe region tab), so this falls back to
+        typing + picking a suggestion."""
         page = self._page
-        field = page.locator(f"#{input_id}")
+        field = None
+        for candidate_id in candidate_ids:
+            loc = page.locator(f"#{candidate_id}")
+            try:
+                if loc.count() > 0 and loc.first.is_visible():
+                    field = loc.first
+                    break
+            except Exception:
+                continue
+        if field is None:
+            field = page.locator(f"#{candidate_ids[0]}")
+
         field.click(timeout=5000)
         page.wait_for_timeout(500)
 
-        field_kind = "origin" if "origin" in input_id else "destination"
+        field_kind = "origin" if "origin" in candidate_ids[0] else "destination"
         direct = page.locator(f"#{field_kind}-{value}")
         try:
             if direct.count() > 0:
@@ -245,8 +263,12 @@ class VirginAustraliaRewardSearch:
         page = self._page
 
         try:
-            self._fill_location("book-a-trip-panel-origin-input", origin)
-            self._fill_location("book-a-trip-panel-destination-input", destination)
+            self._fill_location(
+                ["book-a-trip-panel-origin-input", "from-to-screen-origin-input"], origin
+            )
+            self._fill_location(
+                ["from-to-screen-destination-input", "book-a-trip-panel-destination-input"], destination
+            )
         except PlaywrightTimeoutError as e:
             raise RewardSearchError(
                 f"Could not fill origin/destination for {origin}->{destination}: {e}"
