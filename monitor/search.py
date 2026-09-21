@@ -105,6 +105,7 @@ class VirginAustraliaRewardSearch:
         self._browser = None
         self._page: Page | None = None
         self._network_log: list[str] = []
+        self._pending_requests: dict[int, str] = {}
 
     def __enter__(self) -> "VirginAustraliaRewardSearch":
         self._playwright = sync_playwright().start()
@@ -125,21 +126,48 @@ class VirginAustraliaRewardSearch:
             locale="en-AU",
         )
         # A static HTML/screenshot dump can't show WHY a page never
-        # rendered -- e.g. whether bundle.js came back 403'd (a real
-        # block) vs 200 with a JS error (something else). Log response
-        # status for key script/document requests plus any console errors,
-        # so the next debug dump can actually answer that.
+        # rendered. First attempt (named-file filtering) showed bundle.js/
+        # prefetch.js/custom.js/Incapsula's own scripts all returning 200,
+        # and the app's own analytics beacons firing for its bootstrap
+        # actions (SESSION_REQUESTED, AIRLINE_ROUTES, etc.) -- so nothing
+        # is being network-blocked outright. The real suspect now is one
+        # specific bootstrap XHR/fetch (very possibly session creation)
+        # that hangs and never resolves, which that narrow filter would
+        # have missed entirely since it only matched a few named files.
+        # Track every xhr/fetch/document/script request from dispatch to
+        # resolution (response or failure) so anything left in
+        # _pending_requests at dump time is a request that never got
+        # ANY response at all -- the strongest possible "this exact call
+        # is the one hanging" signal.
+        self._page.on("request", self._on_request)
         self._page.on("response", self._on_response)
+        self._page.on("requestfailed", self._on_request_failed)
         self._page.on("console", self._on_console)
         self._page.on("pageerror", lambda exc: self._network_log.append(f"[pageerror] {exc}"))
         return self
 
+    _TRACKED_RESOURCE_TYPES = ("xhr", "fetch", "document", "script")
+
+    def _on_request(self, request) -> None:
+        try:
+            if request.resource_type in self._TRACKED_RESOURCE_TYPES:
+                self._pending_requests[id(request)] = f"{request.method} {request.resource_type} {request.url}"
+        except Exception:
+            pass
+
     def _on_response(self, response) -> None:
         try:
-            url = response.url
-            if any(k in url for k in ("bundle.js", "prefetch.js", "Incapsula", "flight-selection", "custom.js")) \
-                    or response.request.resource_type == "document":
-                self._network_log.append(f"[response {response.status}] {response.request.resource_type} {url}")
+            req = response.request
+            self._pending_requests.pop(id(req), None)
+            if req.resource_type in self._TRACKED_RESOURCE_TYPES:
+                self._network_log.append(f"[response {response.status}] {req.resource_type} {response.url}")
+        except Exception:
+            pass
+
+    def _on_request_failed(self, request) -> None:
+        try:
+            self._pending_requests.pop(id(request), None)
+            self._network_log.append(f"[request FAILED: {request.failure}] {request.resource_type} {request.url}")
         except Exception:
             pass
 
@@ -170,6 +198,9 @@ class VirginAustraliaRewardSearch:
             pass
         try:
             log_text = "\n".join(self._network_log) or "(no matching responses/console messages logged)"
+            if self._pending_requests:
+                log_text += "\n\n=== STILL PENDING (no response/failure event ever fired) ===\n"
+                log_text += "\n".join(self._pending_requests.values())
             base.with_suffix(".netlog.txt").write_text(log_text)
         except Exception:
             pass
@@ -663,6 +694,7 @@ class VirginAustraliaRewardSearch:
         always_dump_debug: bool = False,
     ) -> list[FlightResult]:
         self._network_log = []
+        self._pending_requests = {}
         try:
             if self._try_direct_url(origin, destination, date, adults):
                 results = self._parse_results(origin, destination, date, cabin)
