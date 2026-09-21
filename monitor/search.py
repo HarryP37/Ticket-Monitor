@@ -37,6 +37,20 @@ CHROMIUM_PATH_CANDIDATES = [
     "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
 ]
 
+# Confirmed via debug capture: destination search returns "No suggestion
+# found" for a bare IATA code ("PER"), while origin search resolves a bare
+# code fine ("CDG" -> "Paris (CDG)"). Type city names instead for the
+# airports this tool's config actually uses, to sidestep that asymmetry.
+AIRPORT_CITY_NAMES = {
+    "CDG": "Paris",
+    "FCO": "Rome",
+    "MXP": "Milan",
+    "BCN": "Barcelona",
+    "MAD": "Madrid",
+    "PER": "Perth",
+    "BNE": "Brisbane",
+}
+
 
 @dataclasses.dataclass
 class FlightResult:
@@ -197,11 +211,19 @@ class VirginAustraliaRewardSearch:
         except Exception:
             pass
 
+        # Typing a bare IATA code returns "No suggestion found" for
+        # destination search (confirmed), so type the city name instead --
+        # the resulting suggestion/browse entries are rendered as
+        # "CityName (CODE)" text (confirmed from screenshots), so matching
+        # on "(CODE)" directly is more robust than guessing the entry's
+        # role/CSS class.
+        type_text = AIRPORT_CITY_NAMES.get(value, value)
         field.fill("", timeout=5000)
-        field.type(value, delay=60)
+        field.type(type_text, delay=60)
         page.wait_for_timeout(800)
 
         for locator in (
+            page.get_by_text(f"({value})", exact=False).first,
             page.get_by_role("option").first,
             page.locator("[role='option'], [class*='suggestion'], [class*='autocomplete'] li").first,
         ):
