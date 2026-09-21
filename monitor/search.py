@@ -451,24 +451,32 @@ class VirginAustraliaRewardSearch:
         # "Loading...") even after a full 30s networkidle wait -- which
         # silently produced a misleadingly-labelled "ok" result with zero
         # data, since nothing here actually checked whether the page had
-        # loaded. Poll actively for either the loading shell to clear or
-        # real content to appear, with a much longer budget, and raise a
-        # clearly diagnostic error if it never resolves.
+        # loaded. Poll actively for real results content to appear, with a
+        # much longer budget, and raise a clearly diagnostic error if it
+        # never resolves.
+        #
+        # An earlier version of this loop also accepted "Reward Seats"
+        # text as a loaded-signal, which backfired: that text already
+        # appears dozens of times on the PREVIOUS marketing-site page
+        # (confirmed from an earlier capture, promotional content), so the
+        # very first poll iteration -- likely still seeing the old page,
+        # before cross-domain navigation had even started -- could match
+        # it immediately and falsely report "loaded" (confirmed: a run's
+        # timestamps showed the whole poll+parse taking only ~52s, far too
+        # short to have actually waited out a stuck load, and its final
+        # dump showed the bare loading shell regardless). "Choose your
+        # flights" only exists on the real results page, so that's the
+        # only signal used now.
         loaded = False
-        for _ in range(30):  # ~60s at 2s intervals
-            spinner = page.locator("#initial-progress-indicator")
-            spinner_gone = spinner.count() == 0 or not spinner.first.is_visible()
+        for _ in range(45):  # ~90s at 2s intervals
             if page.get_by_text("Choose your flights", exact=False).count() > 0:
-                loaded = True
-                break
-            if spinner_gone and page.get_by_text("Reward Seats", exact=False).count() > 0:
                 loaded = True
                 break
             page.wait_for_timeout(2000)
 
         if not loaded:
             raise RewardSearchError(
-                "Results page never loaded past its loading spinner after ~60s. "
+                "Results page never loaded past its loading spinner after ~90s. "
                 "This navigates to a separate Sabre-powered booking domain "
                 "(storefront 'VADX') that loads an Incapsula bot-protection "
                 "resource -- this may be a slow cross-domain load, or the "
