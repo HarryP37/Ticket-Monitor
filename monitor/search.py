@@ -153,15 +153,32 @@ class VirginAustraliaRewardSearch:
         # next after From/To are filled; see the TODO in _fill_search_form.
 
     def _fill_location(self, input_id: str, value: str) -> None:
-        """Fill an origin/destination field and, if the site pops up an
-        autocomplete suggestion list, click the matching suggestion --
-        confirmed these are plain <input> elements (ids
-        book-a-trip-panel-origin-input / -destination-input), so a bare
-        .fill() may not register as a "real" selection the way typing +
-        picking a suggestion does."""
+        """Fill an origin/destination field. Confirmed these are plain
+        <input> elements (ids book-a-trip-panel-origin-input /
+        -destination-input) that open a picker panel on click/focus.
+
+        That panel has a search box AND a static region-browse list with
+        deterministic ids per airport (confirmed e.g. id="destination-PER"
+        for Perth) -- try the direct id first, since the search box's
+        suggestions are unreliable for bare IATA codes (confirmed: typing
+        "PER" returned "No suggestion found" even though "Perth (PER)" was
+        sitting right there in the browse list). Only European origins in
+        this tool's config won't have a browse-list id (no Europe region
+        tab), so this falls back to typing + picking a suggestion."""
         page = self._page
         field = page.locator(f"#{input_id}")
         field.click(timeout=5000)
+        page.wait_for_timeout(500)
+
+        field_kind = "origin" if "origin" in input_id else "destination"
+        direct = page.locator(f"#{field_kind}-{value}")
+        try:
+            if direct.count() > 0:
+                direct.first.click(timeout=3000)
+                return
+        except Exception:
+            pass
+
         field.fill("", timeout=5000)
         field.type(value, delay=60)
         page.wait_for_timeout(800)
