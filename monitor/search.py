@@ -104,6 +104,7 @@ class VirginAustraliaRewardSearch:
         self._playwright = None
         self._browser = None
         self._page: Page | None = None
+        self._network_log: list[str] = []
 
     def __enter__(self) -> "VirginAustraliaRewardSearch":
         self._playwright = sync_playwright().start()
@@ -123,7 +124,31 @@ class VirginAustraliaRewardSearch:
             viewport={"width": 1366, "height": 900},
             locale="en-AU",
         )
+        # A static HTML/screenshot dump can't show WHY a page never
+        # rendered -- e.g. whether bundle.js came back 403'd (a real
+        # block) vs 200 with a JS error (something else). Log response
+        # status for key script/document requests plus any console errors,
+        # so the next debug dump can actually answer that.
+        self._page.on("response", self._on_response)
+        self._page.on("console", self._on_console)
+        self._page.on("pageerror", lambda exc: self._network_log.append(f"[pageerror] {exc}"))
         return self
+
+    def _on_response(self, response) -> None:
+        try:
+            url = response.url
+            if any(k in url for k in ("bundle.js", "prefetch.js", "Incapsula", "flight-selection", "custom.js")) \
+                    or response.request.resource_type == "document":
+                self._network_log.append(f"[response {response.status}] {response.request.resource_type} {url}")
+        except Exception:
+            pass
+
+    def _on_console(self, msg) -> None:
+        try:
+            if msg.type in ("error", "warning"):
+                self._network_log.append(f"[console.{msg.type}] {msg.text}")
+        except Exception:
+            pass
 
     def __exit__(self, exc_type, exc, tb):
         if self._browser:
@@ -141,6 +166,11 @@ class VirginAustraliaRewardSearch:
             pass
         try:
             base.with_suffix(".html").write_text(self._page.content())
+        except Exception:
+            pass
+        try:
+            log_text = "\n".join(self._network_log) or "(no matching responses/console messages logged)"
+            base.with_suffix(".netlog.txt").write_text(log_text)
         except Exception:
             pass
 
@@ -632,6 +662,7 @@ class VirginAustraliaRewardSearch:
         self, origin: str, destination: str, date: dt.date, cabin: str, adults: int,
         always_dump_debug: bool = False,
     ) -> list[FlightResult]:
+        self._network_log = []
         try:
             if self._try_direct_url(origin, destination, date, adults):
                 results = self._parse_results(origin, destination, date, cabin)
