@@ -112,9 +112,9 @@ class VirginAustraliaRewardSearch:
         page.goto(self.booking_url, wait_until="domcontentloaded", timeout=45_000)
         page.wait_for_timeout(2000)
 
-        # Dismiss a cookie-consent banner if present. Site copy/labels vary,
-        # so try a few common phrasings before giving up on this step.
-        for text in ["Accept all", "Accept All Cookies", "Accept", "I Agree"]:
+        # Dismiss the cookie-consent banner (a "CookieYes"-style widget;
+        # confirmed button text is "Accept and close", nested in <span><p>).
+        for text in ["Accept and close", "Accept all", "Accept", "I Agree"]:
             try:
                 btn = page.get_by_role("button", name=text, exact=False)
                 if btn.count() > 0:
@@ -124,24 +124,82 @@ class VirginAustraliaRewardSearch:
                 continue
 
         # Switch the booking widget from "cash" fares to Velocity Points
-        # redemption mode. Adjust this label if the real site phrases it
-        # differently (e.g. "Redeem Points", "Use Velocity Points").
+        # redemption mode. Confirmed: a role="switch" element with
+        # aria-label/accessible-name exactly "Use Velocity Points" (an
+        # earlier version of this code looked for "Use Points", which is
+        # NOT a substring of "Use Velocity Points" and never matched).
         try:
-            toggle = page.get_by_text("Use Points", exact=False)
-            if toggle.count() > 0:
-                toggle.first.click(timeout=5000)
+            toggle = page.get_by_role("switch", name="Use Velocity Points")
+            if toggle.count() == 0:
+                toggle = page.locator('[aria-label="Use Velocity Points"]')
+            toggle.first.click(timeout=5000)
         except Exception:
             raise RewardSearchError(
-                "Could not find/click the 'Use Points' toggle on the booking widget. "
-                "The site's wording or layout has likely changed -- inspect the debug "
-                "screenshot/HTML and update _open_booking_widget()."
+                "Could not find/click the 'Use Velocity Points' toggle on the booking "
+                "widget. The site's wording or layout has likely changed -- inspect the "
+                "debug screenshot/HTML and update _open_booking_widget()."
             )
+        page.wait_for_timeout(500)
 
-        # We only ever want one-way searches (Europe -> Australia). Most
-        # booking widgets default to "Return" and require a return date to
-        # search at all, so select "One way" explicitly. This is best-effort:
-        # if the widget has no such control (e.g. it's one-way-only once in
-        # points mode), this simply no-ops rather than failing the search.
+        # NOTE: no "One way"/"Return" control is visible on the homepage
+        # widget at this stage (confirmed from a live capture) -- only the
+        # points toggle plus the From/To fields below. Trip type, if
+        # selectable at all, is presumably chosen on whatever screen comes
+        # next after From/To are filled; see the TODO in _fill_search_form.
+
+    def _fill_location(self, input_id: str, value: str) -> None:
+        """Fill an origin/destination field and, if the site pops up an
+        autocomplete suggestion list, click the matching suggestion --
+        confirmed these are plain <input> elements (ids
+        book-a-trip-panel-origin-input / -destination-input), so a bare
+        .fill() may not register as a "real" selection the way typing +
+        picking a suggestion does."""
+        page = self._page
+        field = page.locator(f"#{input_id}")
+        field.click(timeout=5000)
+        field.fill("", timeout=5000)
+        field.type(value, delay=60)
+        page.wait_for_timeout(800)
+
+        for locator in (
+            page.get_by_role("option").first,
+            page.locator("[role='option'], [class*='suggestion'], [class*='autocomplete'] li").first,
+        ):
+            try:
+                if locator.count() > 0:
+                    locator.click(timeout=3000)
+                    return
+            except Exception:
+                continue
+        page.keyboard.press("Enter")
+
+    def _fill_search_form(self, origin: str, destination: str, date: dt.date, cabin: str, adults: int) -> None:
+        page = self._page
+
+        # These two are the only steps confirmed to exist on the homepage
+        # widget, so a failure here is a real, hard failure.
+        try:
+            self._fill_location("book-a-trip-panel-origin-input", origin)
+            self._fill_location("book-a-trip-panel-destination-input", destination)
+        except PlaywrightTimeoutError as e:
+            raise RewardSearchError(
+                f"Could not fill origin/destination for {origin}->{destination}: {e}"
+            )
+        page.wait_for_timeout(1500)
+
+        # TODO: everything below (trip type, date, cabin class, submit) is
+        # UNCONFIRMED -- the homepage widget doesn't expose these fields, so
+        # they likely live on a subsequent screen reached after From/To are
+        # filled (possibly a full navigation to a search-results/booking
+        # page). Deliberately best-effort/non-fatal for now: log and move on
+        # rather than raising, so whatever screen we land on gets captured
+        # by the debug dump for the next round of fixes instead of us
+        # aborting before seeing it.
+        try:
+            page.wait_for_load_state("networkidle", timeout=10_000)
+        except PlaywrightTimeoutError:
+            pass
+
         for text in ["One way", "One Way", "Oneway"]:
             try:
                 option = page.get_by_text(text, exact=False)
@@ -151,31 +209,43 @@ class VirginAustraliaRewardSearch:
             except Exception:
                 continue
 
-    def _fill_search_form(self, origin: str, destination: str, date: dt.date, cabin: str, adults: int) -> None:
-        page = self._page
+        date_str = date.strftime("%d %b %Y")  # e.g. "05 May 2027"
+        for label in ["Departure date", "Departing on", "Date"]:
+            try:
+                field = page.get_by_label(label, exact=False)
+                if field.count() > 0:
+                    field.first.fill(date_str, timeout=3000)
+                    break
+            except Exception:
+                continue
+
+        if cabin.lower() == "business":
+            cabin_text = "Business"
+        elif cabin.lower() == "premium_economy":
+            cabin_text = "Premium Economy"
+        else:
+            cabin_text = None
+        if cabin_text:
+            try:
+                option = page.get_by_text(cabin_text, exact=False)
+                if option.count() > 0:
+                    option.first.click(timeout=3000)
+            except Exception:
+                pass
+
+        for name in ["Search", "Search flights", "Find flights"]:
+            try:
+                btn = page.get_by_role("button", name=name, exact=False)
+                if btn.count() > 0:
+                    btn.first.click(timeout=5000)
+                    break
+            except Exception:
+                continue
+
         try:
-            page.get_by_label("From", exact=False).fill(origin, timeout=5000)
-            page.wait_for_timeout(500)
-            page.keyboard.press("Enter")
-
-            page.get_by_label("To", exact=False).fill(destination, timeout=5000)
-            page.wait_for_timeout(500)
-            page.keyboard.press("Enter")
-
-            date_str = date.strftime("%d %b %Y")  # e.g. "05 May 2027"
-            page.get_by_label("Departure date", exact=False).fill(date_str, timeout=5000)
-
-            if cabin.lower() == "business":
-                page.get_by_text("Business", exact=False).first.click(timeout=5000)
-            elif cabin.lower() == "premium_economy":
-                page.get_by_text("Premium Economy", exact=False).first.click(timeout=5000)
-
-            page.get_by_role("button", name="Search", exact=False).click(timeout=10_000)
-            page.wait_for_load_state("networkidle", timeout=30_000)
-        except PlaywrightTimeoutError as e:
-            raise RewardSearchError(
-                f"Timed out filling the search form for {origin}->{destination} on {date}: {e}"
-            )
+            page.wait_for_load_state("networkidle", timeout=20_000)
+        except PlaywrightTimeoutError:
+            pass
 
     def _parse_results(self, origin: str, destination: str, date: dt.date, cabin: str) -> list[FlightResult]:
         page = self._page
