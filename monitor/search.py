@@ -243,7 +243,7 @@ class VirginAustraliaRewardSearch:
         # ordinals do, so neither do we.
         return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }"
 
-    def _select_calendar_date(self, date: dt.date) -> None:
+    def _select_calendar_date(self, date: dt.date, always_dump_debug: bool = False) -> None:
         """Confirmed via debug capture: the bare visible day digit sits in
         an aria-hidden <abbr> and is genuinely ambiguous (e.g. "1" also
         matches the guest-count stepper elsewhere on the page) -- an
@@ -319,7 +319,26 @@ class VirginAustraliaRewardSearch:
             sr_text.first.dispatch_event("click")
         page.wait_for_timeout(500)
 
-    def _fill_search_form(self, origin: str, destination: str, date: dt.date, cabin: str, adults: int) -> None:
+        # dispatch_event alone hasn't been confirmed to work yet (unclear
+        # whether this app's listeners even catch synthetic/non-trusted
+        # events) -- also try a real mouse click at the tile's actual
+        # screen coordinates as a second attempt, in case one succeeds
+        # where the other doesn't.
+        try:
+            box = tile.first.bounding_box()
+            if box:
+                page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+        if always_dump_debug:
+            self._dump_debug(f"calendar_after_click_{date.isoformat()}")
+
+    def _fill_search_form(
+        self, origin: str, destination: str, date: dt.date, cabin: str, adults: int,
+        always_dump_debug: bool = False,
+    ) -> None:
         """Confirmed 3-step modal wizard (from a manual walkthrough of the
         real site): Route (From/To) -> "Select dates" -> calendar (One way
         already default-selected) -> "Add guests" -> guests review (Adult
@@ -382,7 +401,7 @@ class VirginAustraliaRewardSearch:
             pass
 
         try:
-            self._select_calendar_date(date)
+            self._select_calendar_date(date, always_dump_debug=always_dump_debug)
         except RewardSearchError:
             raise
         except Exception as e:
@@ -508,7 +527,7 @@ class VirginAustraliaRewardSearch:
     ) -> list[FlightResult]:
         try:
             self._open_booking_widget()
-            self._fill_search_form(origin, destination, date, cabin, adults)
+            self._fill_search_form(origin, destination, date, cabin, adults, always_dump_debug=always_dump_debug)
             results = self._parse_results(origin, destination, date, cabin)
             if always_dump_debug:
                 self._dump_debug(f"ok_{origin}_{destination}_{date.isoformat()}")
