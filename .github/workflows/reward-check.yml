@@ -1,6 +1,6 @@
 name: Check Virgin Australia reward availability
 
-on:
+on: # re-touching this file to force GitHub to (re-)index the workflow
   schedule:
     # Daily at 20:00 UTC (~06:00 AEST). Change to e.g. "0 20 * * 1" for
     # weekly (every Monday) instead.
