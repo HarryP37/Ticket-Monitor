@@ -235,17 +235,28 @@ class VirginAustraliaRewardSearch:
                 continue
         page.keyboard.press("Enter")
 
+    @staticmethod
+    def _ordinal(n: int) -> str:
+        if 11 <= (n % 100) <= 13:
+            return f"{n}th"
+        return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }"
+
     def _select_calendar_date(self, date: dt.date) -> None:
-        """The date-picker shows two months side by side (e.g. May 2027 /
-        June 2027), so day numbers repeat -- scope the click to whichever
-        column also has the target month's heading. Best-effort: if
-        navigation or scoping fails, this raises and the caller treats it
-        as a hard failure (there's no way to proceed without a date)."""
+        """Confirmed via debug capture: the bare visible day digit sits in
+        an aria-hidden <abbr> and is genuinely ambiguous (e.g. "1" also
+        matches the guest-count stepper elsewhere on the page) -- an
+        earlier version matched on it and silently clicked the wrong
+        thing, leaving the date unset with no error. Each day tile also
+        carries a unique, unambiguous screen-reader-only label right next
+        to it though (confirmed exact format: "Saturday, 1st May 2027"),
+        so match on that instead and click its nearest ancestor tile
+        (the label span itself may not be "visible" per Playwright's
+        actionability check, being screen-reader-only)."""
         page = self._page
-        target_label = date.strftime("%B %Y")  # e.g. "May 2027"
+        target_month_label = date.strftime("%B %Y")  # e.g. "May 2027"
 
         for _ in range(24):
-            if page.get_by_text(target_label, exact=False).count() > 0:
+            if page.get_by_text(target_month_label, exact=False).count() > 0:
                 break
             advanced = False
             for name in ["Next", "Next month", ">"]:
@@ -261,18 +272,14 @@ class VirginAustraliaRewardSearch:
             if not advanced:
                 break
 
-        day_str = str(date.day)
-        month_heading = page.get_by_text(target_label, exact=False).first
-        if month_heading.count() == 0:
-            raise RewardSearchError(f"Calendar never showed target month {target_label}")
-        # Assume day cells are inside the same immediate container as the
-        # month heading (a common "month block" layout) so we don't click
-        # the same day number in the adjacent month.
-        column = month_heading.locator("xpath=ancestor::*[self::div or self::section][1]")
-        day_cell = column.get_by_text(day_str, exact=True)
-        if day_cell.count() == 0:
-            day_cell = page.get_by_text(day_str, exact=True)
-        day_cell.first.click(timeout=5000)
+        day_label = f"{date.strftime('%A')}, {self._ordinal(date.day)} {target_month_label}"
+        sr_text = page.get_by_text(day_label, exact=False)
+        if sr_text.count() == 0:
+            raise RewardSearchError(f"Calendar tile for '{day_label}' not found")
+        tile = sr_text.first.locator("xpath=ancestor::*[contains(@class,'fsDateTile')][1]")
+        if tile.count() == 0:
+            tile = sr_text.first.locator("xpath=..")
+        tile.first.click(timeout=5000, force=True)
 
     def _fill_search_form(self, origin: str, destination: str, date: dt.date, cabin: str, adults: int) -> None:
         """Confirmed 3-step modal wizard (from a manual walkthrough of the
@@ -307,16 +314,34 @@ class VirginAustraliaRewardSearch:
                 continue
         page.wait_for_timeout(800)
 
-        # Confirmed default-selected already, but click explicitly in case
-        # a future visit or different route defaults to "Return" instead.
-        for text in ["One way", "One Way", "Oneway"]:
-            try:
-                option = page.get_by_text(text, exact=False)
-                if option.count() > 0:
-                    option.first.click(timeout=3000)
-                    break
-            except Exception:
-                continue
+        # NOT default-selected (confirmed via debug capture: "Return" is
+        # aria-checked="true" by default, and a plain text-match click on
+        # "One way" silently failed to change it -- likely an animated
+        # overlay sibling intercepting the click). This is a role="radio"
+        # div with a stable id, so target that directly with a forced
+        # click to bypass any interception.
+        try:
+            page.locator("#one-way").click(timeout=3000, force=True)
+        except Exception:
+            for text in ["One way", "One Way", "Oneway"]:
+                try:
+                    option = page.get_by_text(text, exact=False)
+                    if option.count() > 0:
+                        option.first.click(timeout=3000, force=True)
+                        break
+                except Exception:
+                    continue
+        page.wait_for_timeout(300)
+        try:
+            one_way = page.locator("#one-way")
+            if one_way.count() > 0 and one_way.first.get_attribute("aria-checked") != "true":
+                # The radiogroup's own label says "Use arrow keys to change
+                # trip type" -- click may not be wired up at all on these,
+                # only keyboard. Focus the group and navigate to it.
+                page.locator("#calendar-controls-journey-type-switch [role='radiogroup']").focus()
+                page.keyboard.press("Home")
+        except Exception:
+            pass
 
         try:
             self._select_calendar_date(date)
