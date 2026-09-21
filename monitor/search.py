@@ -237,8 +237,10 @@ class VirginAustraliaRewardSearch:
 
     @staticmethod
     def _ordinal(n: int) -> str:
-        if 11 <= (n % 100) <= 13:
-            return f"{n}th"
+        # Matches the site's own (non-standard) suffix logic exactly, per a
+        # debug capture's screen-reader labels: "11st", "12nd", "13rd" --
+        # it doesn't apply the usual 11-13 exception that standard English
+        # ordinals do, so neither do we.
         return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }"
 
     def _select_calendar_date(self, date: dt.date) -> None:
@@ -276,9 +278,18 @@ class VirginAustraliaRewardSearch:
         sr_text = page.get_by_text(day_label, exact=False)
         if sr_text.count() == 0:
             raise RewardSearchError(f"Calendar tile for '{day_label}' not found")
-        tile = sr_text.first.locator("xpath=ancestor::*[contains(@class,'fsDateTile')][1]")
-        if tile.count() == 0:
-            tile = sr_text.first.locator("xpath=..")
+        # Confirmed DOM: <div class="fsDateTile">  <div class=
+        # "fsDateTileDefault ... fsDateTileDefaultIsSelectable">  <div
+        # class="fsDateTileDate">  <div class="fsDateTileScreenReaderOnly">
+        # {day_label}</div> <abbr aria-hidden>N</abbr> </div></div></div>.
+        # Going up just one ancestor lands on fsDateTileDate -- which
+        # itself contains "fsDateTile" as a substring, so a
+        # contains(@class,'fsDateTile') predicate matched it a level too
+        # early. That div is a plain layout wrapper with no click handler
+        # and, being inside a screen-reader-only node, may have a
+        # degenerate bounding box -- clicking it silently did nothing.
+        # Go up two levels instead, to the actual "IsSelectable" element.
+        tile = sr_text.first.locator("xpath=../..")
         tile.first.click(timeout=5000, force=True)
 
     def _fill_search_form(self, origin: str, destination: str, date: dt.date, cabin: str, adults: int) -> None:
