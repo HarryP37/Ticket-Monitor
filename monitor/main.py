@@ -35,7 +35,8 @@ def run(config_path: str = "config.yaml") -> int:
     found_all = []
     errors = []
 
-    with VirginAustraliaRewardSearch(config.booking_url, config.debug_dir) as searcher:
+    headless = os.environ.get("HEADLESS", "true").lower() != "false"
+    with VirginAustraliaRewardSearch(config.booking_url, config.debug_dir, headless=headless) as searcher:
         for route in config.routes:
             for date in dates:
                 try:

@@ -24,34 +24,39 @@ Barcelona/Madrid to Perth/Brisbane, in May and September.
 5. `.github/workflows/reward-check.yml` runs the whole thing daily via
    GitHub Actions — no server of your own required.
 
-## ⚠️ Important limitations — read before relying on this
+## ⚠️ Current status — read before relying on this
 
-**The site-scraping selectors are unverified.** This was built in an
-environment whose outbound network access to virginaustralia.com was
-blocked by organizational policy, so I was not able to load the real page
-and confirm field names, labels, or result markup. `monitor/search.py` is
-written defensively (resilient label/role-based Playwright queries, not
-brittle CSS classes) and dumps a screenshot + HTML snapshot to `debug/`
-(uploaded as a workflow artifact) on any failure or unexpected page state.
+**The search wizard itself is fully working**, confirmed against the real
+site across many debug-artifact round trips: the Velocity Points toggle,
+origin/destination entry, one-way trip type, calendar date selection,
+guest review, and submitting the search ("Let's fly") all reliably work
+in `monitor/search.py`.
 
-**Before trusting the schedule**, trigger the workflow manually once
-(Actions tab → "Check Virgin Australia reward availability" → Run
-workflow), then check the run's debug artifact if it didn't find results
-you expected. Send me (or paste into an editor) the screenshot/HTML and
-I can correct the selectors in `_open_booking_widget`, `_fill_search_form`,
-and `_parse_results` — those three functions are the only site-specific
-part of the codebase.
+**Blocked at the last step.** Submitting a search hands off to a
+*separate* booking-engine domain (Sabre-powered, storefront "VADX") that
+loads a script from **Incapsula**, a bot-detection/WAF service. That page
+has consistently failed to render past its own loading spinner —
+confirmed identical (down to the byte) across multiple runs even after
+waiting a full 90 seconds, which isn't how a real user's experience would
+ever look. `_fill_search_form` raises a clear, explicitly-labelled error
+when this happens (rather than silently reporting "no results"), and
+`_parse_results` (the fare-modal parsing logic) has never actually been
+exercised against real results yet as a result.
 
-**Bot detection is a real risk.** Major airline booking engines commonly
-run anti-bot systems (Akamai, PerimeterX, etc.) that can block automated
-browsers outright, including from GitHub Actions' shared IP ranges. If
-runs start failing with a CAPTCHA/"unusual traffic" page in the debug
-artifact, that's what's happening. I deliberately haven't built in any
-evasion (proxy rotation, fingerprint spoofing) — that crosses from
-"personal reward monitoring" into something I won't automate. If you hit
-this wall, the practical fallback is running the script from your own
-machine's cron instead of GitHub Actions (`python -m monitor.main` works
-identically locally — see below).
+**I haven't tried to defeat this**, and don't intend to — no fingerprint
+spoofing, proxy rotation, or stealth plugins to hide that it's a
+headless/automated browser. That crosses from "personal reward
+monitoring" into active evasion, which is out of scope for what I'll
+automate here.
+
+**The one thing actually worth trying:** run it from your own machine
+instead of GitHub Actions (see "Running locally" below). GitHub Actions'
+IP ranges are shared/datacenter and commonly pre-flagged by services like
+Incapsula regardless of browser behavior; a residential IP might fare
+differently. No guarantee, but it's the one meaningful variable left to
+test. Set `HEADLESS=false` for that run so you can watch the actual
+browser and see whether a CAPTCHA/challenge appears (something a
+post-hoc screenshot might not fully capture).
 
 **These routes likely mean partner reward seats, not VA metal.** Virgin
 Australia doesn't fly Europe–Australia directly, so any results here would
@@ -84,9 +89,23 @@ website terms of use. Use at your own judgement/risk.
 
 ## Running locally
 
+Email setup (`SMTP_*`/`EMAIL_TO`) isn't required just to test whether the
+site itself works — the code only tries to send an email if it actually
+finds a result.
+
 ```bash
+git clone https://github.com/HarryP37/Ticket-Monitor.git
+cd Ticket-Monitor
 pip install -r requirements.txt
 playwright install chromium
+
+# Quick single-route test, browser visible so you can watch it:
+TEST_MODE=true HEADLESS=false python -m monitor.main
+```
+
+For a real run with email notifications, add the SMTP env vars:
+
+```bash
 export SMTP_HOST=... SMTP_PORT=587 SMTP_USER=... SMTP_PASS=... EMAIL_TO=...
 python -m monitor.main
 ```
