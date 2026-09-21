@@ -1,0 +1,58 @@
+# Ticket-Monitor configuration
+#
+# Routes to watch for Virgin Australia "Book with Velocity Points" reward
+# availability. These European origins are not served by Virgin Australia
+# metal, so results here depend on whichever Velocity partner airline
+# (e.g. Etihad, Singapore Airlines) VA's own website is able to search and
+# sell as a reward booking. If a route/date returns nothing, that can mean
+# either "no reward seats" or "this pair isn't searchable on VA's site" --
+# see README.md for details and how to tell the difference.
+
+booking_url: "https://www.virginaustralia.com/au/en/"
+
+routes:
+  - origin: CDG   # Paris Charles de Gaulle
+    destination: PER   # Perth
+  - origin: CDG
+    destination: BNE   # Brisbane
+  - origin: FCO   # Rome Fiumicino
+    destination: PER
+  - origin: FCO
+    destination: BNE
+  - origin: MXP   # Milan Malpensa
+    destination: PER
+  - origin: MXP
+    destination: BNE
+  - origin: BCN   # Barcelona
+    destination: PER
+  - origin: BCN
+    destination: BNE
+  - origin: MAD   # Madrid
+    destination: PER
+  - origin: MAD
+    destination: BNE
+
+search:
+  # Only search dates falling in these calendar months (1-12).
+  months: [5, 9]
+  # Check every Nth day within each of those months, to keep the number of
+  # searches per run manageable. 7 = weekly sampling.
+  day_step: 7
+  # How many years ahead to look. Velocity typically releases reward
+  # inventory well under 12 months out, so 1 is usually enough; raise it
+  # only if you know VA releases seats further ahead.
+  years_ahead: 1
+  cabin: business   # business | premium_economy | economy
+  adults: 1
+  # Seconds to sleep between individual searches, to keep request volume
+  # gentle rather than hammering the site back-to-back.
+  min_delay_seconds: 3
+  max_delay_seconds: 8
+
+notification:
+  # Only email when a route/date/flight combo hasn't already been alerted
+  # on (see data/seen.json). Set to false to get a full report every run.
+  only_notify_new: true
+
+state_file: "data/seen.json"
+debug_dir: "debug"

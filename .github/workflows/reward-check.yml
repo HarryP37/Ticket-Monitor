@@ -1,0 +1,57 @@
+name: Check Virgin Australia reward availability
+
+on:
+  schedule:
+    # Daily at 20:00 UTC (~06:00 AEST). Change to e.g. "0 20 * * 1" for
+    # weekly (every Monday) instead.
+    - cron: "0 20 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Run reward search
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: python -m monitor.main
+
+      - name: Upload debug artifacts (only created on failures/unexpected pages)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-${{ github.run_id }}
+          path: debug/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Commit updated seen-state
+        if: always()
+        run: |
+          git config user.name "ticket-monitor-bot"
+          git config user.email "actions@users.noreply.github.com"
+          if ! git diff --quiet -- data/seen.json; then
+            git add data/seen.json
+            git commit -m "Update seen reward-alert state [skip ci]"
+            git push
+          fi
