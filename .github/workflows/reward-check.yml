@@ -5,7 +5,12 @@ on: # re-touching this file to force GitHub to (re-)index the workflow
     # Daily at 20:00 UTC (~06:00 AEST). Change to e.g. "0 20 * * 1" for
     # weekly (every Monday) instead.
     - cron: "0 20 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      test_mode:
+        description: "Test mode: only run 1 route/date, and save a debug screenshot+HTML even on success (for fixing selectors)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -28,6 +33,7 @@ jobs:
 
       - name: Run reward search
         env:
+          TEST_MODE: ${{ inputs.test_mode }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}

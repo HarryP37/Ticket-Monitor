@@ -3,6 +3,7 @@ Business class Velocity Points reward availability."""
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 from .config import load_config
@@ -20,6 +21,13 @@ def run(config_path: str = "config.yaml") -> int:
     dates = generate_dates(
         config.search.months, config.search.day_step, config.search.years_ahead
     )
+
+    test_mode = os.environ.get("TEST_MODE") == "true"
+    if test_mode:
+        config.routes = config.routes[:1]
+        dates = dates[:1]
+        log.info("TEST_MODE: limited to a single route/date for fast selector debugging.")
+
     log.info("Checking %d route(s) x %d date(s) = %d searches", len(config.routes), len(dates), len(config.routes) * len(dates))
 
     seen = load_seen(config.state_file)
@@ -34,6 +42,7 @@ def run(config_path: str = "config.yaml") -> int:
                     results = searcher.search(
                         route.origin, route.destination, date,
                         config.search.cabin, config.search.adults,
+                        always_dump_debug=test_mode,
                     )
                 except RewardSearchError as e:
                     log.warning("Search failed for %s->%s on %s: %s", route.origin, route.destination, date, e)

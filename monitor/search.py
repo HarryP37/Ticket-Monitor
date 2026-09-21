@@ -229,11 +229,17 @@ class VirginAustraliaRewardSearch:
             )
         return results
 
-    def search(self, origin: str, destination: str, date: dt.date, cabin: str, adults: int) -> list[FlightResult]:
+    def search(
+        self, origin: str, destination: str, date: dt.date, cabin: str, adults: int,
+        always_dump_debug: bool = False,
+    ) -> list[FlightResult]:
         try:
             self._open_booking_widget()
             self._fill_search_form(origin, destination, date, cabin, adults)
-            return self._parse_results(origin, destination, date, cabin)
+            results = self._parse_results(origin, destination, date, cabin)
+            if always_dump_debug:
+                self._dump_debug(f"ok_{origin}_{destination}_{date.isoformat()}")
+            return results
         except RewardSearchError:
             self._dump_debug(f"error_{origin}_{destination}_{date.isoformat()}")
             raise
